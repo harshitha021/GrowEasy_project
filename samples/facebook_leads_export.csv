@@ -1,0 +1,6 @@
+created_time,full_name,phone_number,email,campaign_name,ad_name,city
+2026-05-13T14:20:48+05:30,John Doe,+919876543210,john.doe@example.com,Eden Park Villas Ph-2,Carousel-A,Mumbai
+2026-05-14T09:12:03+05:30,SARAH JOHNSON,919876543211,sarah.j@example.com,Sarjapur Plots FB Ads,Video-1,Bengaluru
+2026-05-14T11:45:00+05:30,rajesh patel,09876543212,,Meridian Tower Launch,Static-3,Delhi
+2026-05-15T16:30:22+05:30,Priya Singh,,priya.singh@example.com,Eden Park Villas Ph-2,Carousel-B,Pune
+2026-05-15T18:02:10+05:30,Test User,,,Eden Park Villas Ph-2,Carousel-B,
