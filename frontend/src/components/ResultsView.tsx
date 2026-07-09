@@ -1,11 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { CRM_FIELDS, CRM_STATUSES, DATA_SOURCES, type ImportSummary } from '@/types';
 import { ColumnMappingPanel } from './ColumnMappingPanel';
 import { DataTable } from './DataTable';
+import { SearchInput } from './SearchInput';
 import { StatsCards } from './StatsCards';
+
+/** Context-appropriate colors for each CRM status, tuned for both themes. */
+const STATUS_BADGES: Record<string, string> = {
+  GOOD_LEAD_FOLLOW_UP: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400',
+  DID_NOT_CONNECT: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+  BAD_LEAD: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
+  SALE_DONE: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
+};
 
 const escapeCsv = (v: string) =>
   /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -58,6 +67,9 @@ export function ResultsView({
 }) {
   const [tab, setTab] = useState<'imported' | 'skipped'>('imported');
   const [editing, setEditing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
 
   const canEdit =
     tab === 'imported'
@@ -86,10 +98,40 @@ export function ResultsView({
 
   // Skipped table: skip reason first, then every original CSV column.
   const skippedHeaders = ['skip reason', ...rawColumns];
-  const skippedRows = summary.skipped.map((s) => ({
+
+  /** Imported records matching search + filters, original indices kept. */
+  const importedFiltered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return summary.imported
+      .map((rec, index) => ({ rec, index }))
+      .filter(({ rec }) => {
+        if (statusFilter && rec.crm_status !== statusFilter) return false;
+        if (sourceFilter && rec.data_source !== sourceFilter) return false;
+        if (q && !CRM_FIELDS.some((f) => (rec[f] ?? '').toLowerCase().includes(q)))
+          return false;
+        return true;
+      });
+  }, [summary.imported, query, statusFilter, sourceFilter]);
+
+  /** Skipped rows matching the search (reason + raw values). */
+  const skippedFiltered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return summary.skipped
+      .map((s, index) => ({ s, index }))
+      .filter(
+        ({ s }) =>
+          !q ||
+          s.reason.toLowerCase().includes(q) ||
+          Object.values(s.raw).some((v) => v.toLowerCase().includes(q))
+      );
+  }, [summary.skipped, query]);
+
+  const skippedRows = skippedFiltered.map(({ s }) => ({
     'skip reason': s.reason,
     ...s.raw,
   }));
+
+  const filtersActive = Boolean(query.trim() || statusFilter || sourceFilter);
 
   return (
     <div className="space-y-6">
@@ -225,15 +267,79 @@ export function ResultsView({
         </div>
       </div>
 
+      {/* Search (both tabs) + filters (imported only, post-AI fields) */}
+      <div className="flex flex-wrap items-center gap-3">
+        <SearchInput value={query} onChange={setQuery} placeholder="Search records…" />
+        {tab === 'imported' && (
+          <>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filter by CRM status"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-200"
+            >
+              <option value="">All statuses</option>
+              {CRM_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              aria-label="Filter by data source"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-200"
+            >
+              <option value="">All sources</option>
+              {DATA_SOURCES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {filtersActive && (
+          <span className="text-xs text-slate-500 dark:text-zinc-400">
+            Showing{' '}
+            {tab === 'imported'
+              ? `${importedFiltered.length} of ${summary.totalImported}`
+              : `${skippedFiltered.length} of ${summary.totalSkipped}`}{' '}
+            records
+            <button
+              type="button"
+              onClick={() => {
+                setQuery('');
+                setStatusFilter('');
+                setSourceFilter('');
+              }}
+              className="ml-2 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              Clear
+            </button>
+          </span>
+        )}
+      </div>
+
       {tab === 'imported' ? (
         <DataTable
           headers={[...CRM_FIELDS]}
-          rows={summary.imported.map(({ rowIndex: _rowIndex, ...rec }) => rec)}
-          rowNumbers={summary.imported.map((r) => r.rowIndex)}
-          emptyMessage="No records were imported."
+          rows={importedFiltered.map(({ rec: { rowIndex: _rowIndex, ...rest } }) => rest)}
+          rowNumbers={importedFiltered.map(({ rec }) => rec.rowIndex)}
+          emptyMessage={
+            filtersActive
+              ? 'No records match your search/filters.'
+              : 'No records were imported.'
+          }
           editable={editing}
-          onCellChange={onEditRecord}
+          onCellChange={
+            onEditRecord
+              ? (i, h, v) => onEditRecord(importedFiltered[i].index, h, v)
+              : undefined
+          }
           selectOptions={{ crm_status: CRM_STATUSES, data_source: DATA_SOURCES }}
+          badgeStyles={{ crm_status: STATUS_BADGES }}
         />
       ) : (
         <div className="space-y-3">
@@ -249,10 +355,18 @@ export function ResultsView({
           <DataTable
             headers={skippedHeaders}
             rows={skippedRows}
-            rowNumbers={summary.skipped.map((s) => s.rowIndex)}
-            emptyMessage="No records were skipped — every row was imported."
+            rowNumbers={skippedFiltered.map(({ s }) => s.rowIndex)}
+            emptyMessage={
+              filtersActive
+                ? 'No skipped rows match your search.'
+                : 'No records were skipped — every row was imported.'
+            }
             editable={editing}
-            onCellChange={onEditSkipped}
+            onCellChange={
+              onEditSkipped
+                ? (i, h, v) => onEditSkipped(skippedFiltered[i].index, h, v)
+                : undefined
+            }
             readOnlyColumns={['skip reason']}
           />
         </div>

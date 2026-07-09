@@ -18,6 +18,8 @@ interface DataTableProps {
   selectOptions?: Record<string, readonly string[]>;
   /** Columns that stay read-only even in edit mode. */
   readOnlyColumns?: readonly string[];
+  /** Per-column value → badge classes; matching values render as colored pills. */
+  badgeStyles?: Record<string, Record<string, string>>;
 }
 
 /** Above this row count, only visible rows are rendered (virtualization). */
@@ -42,6 +44,7 @@ export function DataTable({
   onCellChange,
   selectOptions,
   readOnlyColumns,
+  badgeStyles,
 }: DataTableProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualize = rows.length > VIRTUALIZE_THRESHOLD;
@@ -167,7 +170,15 @@ export function DataTable({
                       className="max-w-xs truncate whitespace-nowrap px-3 py-2 text-slate-700 dark:text-zinc-300"
                       title={row[h]}
                     >
-                      {row[h] || <span className="text-slate-300 dark:text-zinc-600">—</span>}
+                      {badgeStyles?.[h]?.[row[h]] ? (
+                        <span
+                          className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${badgeStyles[h][row[h]]}`}
+                        >
+                          {row[h]}
+                        </span>
+                      ) : (
+                        row[h] || <span className="text-slate-300 dark:text-zinc-600">—</span>
+                      )}
                     </td>
                   )
                 )}

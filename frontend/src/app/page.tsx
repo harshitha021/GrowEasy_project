@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useImport } from '@/hooks/useImport';
 import { FileDropzone } from '@/components/FileDropzone';
@@ -10,6 +10,7 @@ import { ResultsView } from '@/components/ResultsView';
 import { StepIndicator } from '@/components/StepIndicator';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { RecentImports } from '@/components/RecentImports';
+import { SearchInput } from '@/components/SearchInput';
 
 export default function Home() {
   const {
@@ -25,6 +26,19 @@ export default function Home() {
     updateSkippedCell,
   } = useImport();
   const [editingPreview, setEditingPreview] = useState(false);
+  const [previewQuery, setPreviewQuery] = useState('');
+
+  /** Preview rows matching the search, with their original indices kept. */
+  const previewFiltered = useMemo(() => {
+    const rows = state.parseResult?.rows ?? [];
+    const q = previewQuery.trim().toLowerCase();
+    if (!q) return rows.map((row, index) => ({ row, index }));
+    return rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) =>
+        Object.values(row).some((v) => v.toLowerCase().includes(q))
+      );
+  }, [state.parseResult, previewQuery]);
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-x-clip">
@@ -45,7 +59,7 @@ export default function Home() {
       </div>
 
       <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-white/10/70 dark:bg-black/70">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3.5">
+        <div className="flex w-full items-center justify-between px-3 py-3.5 sm:px-5">
           <motion.button
             type="button"
             onClick={reset}
@@ -53,9 +67,12 @@ export default function Home() {
             aria-label="Go to home"
             className="flex items-center gap-3 rounded-xl text-left"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 font-bold text-white shadow-md shadow-indigo-500/25 transition-shadow hover:shadow-lg hover:shadow-indigo-500/35">
-              G
-            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element -- .ico logo, no optimization needed */}
+            <img
+              src="/favicon.ico"
+              alt="GrowEasy logo"
+              className="h-9 w-9 rounded-xl shadow-md shadow-indigo-500/25 transition-shadow hover:shadow-lg hover:shadow-indigo-500/35"
+            />
             <div>
               <h1 className="text-base font-semibold leading-tight tracking-tight">
                 GrowEasy CSV Importer
@@ -69,7 +86,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 gap-8 px-4 py-10">
+      <main className="flex w-full flex-1 gap-6 px-3 py-10 sm:px-5">
         {/* Left sidebar — import history, always visible on desktop */}
         <aside className="hidden w-72 shrink-0 lg:block">
           <div className="sticky top-24">
@@ -193,6 +210,7 @@ export default function Home() {
                     type="button"
                     onClick={() => {
                       setEditingPreview(false);
+                      setPreviewQuery('');
                       reset();
                     }}
                     className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
@@ -203,6 +221,7 @@ export default function Home() {
                     type="button"
                     onClick={() => {
                       setEditingPreview(false);
+                      setPreviewQuery('');
                       confirmImport();
                     }}
                     whileHover={{ scale: 1.03 }}
@@ -213,12 +232,24 @@ export default function Home() {
                   </motion.button>
                 </div>
               </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <SearchInput
+                  value={previewQuery}
+                  onChange={setPreviewQuery}
+                  placeholder="Search rows…"
+                />
+                {previewQuery && (
+                  <span className="text-xs text-slate-500 dark:text-zinc-400">
+                    Showing {previewFiltered.length} of {state.parseResult.totalRows} rows
+                  </span>
+                )}
+              </div>
               <DataTable
                 headers={state.parseResult.headers}
-                rows={state.parseResult.rows}
-                rowNumbers={state.parseResult.rows.map((_, i) => i + 1)}
+                rows={previewFiltered.map(({ row }) => row)}
+                rowNumbers={previewFiltered.map(({ index }) => index + 1)}
                 editable={editingPreview}
-                onCellChange={updatePreviewCell}
+                onCellChange={(i, h, v) => updatePreviewCell(previewFiltered[i].index, h, v)}
               />
             </div>
           )}

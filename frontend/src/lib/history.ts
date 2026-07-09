@@ -23,9 +23,11 @@ export interface HistoryEntry {
   /** Present only when the import was small enough to store fully. */
   summary?: ImportSummary;
   error?: string;
-  /** Retry jobs only: id of the original entry to merge results into. */
-  mergeInto?: string;
-  /** Retry jobs only: retry rowIndex (1-based) -> original CSV rowIndex. */
+  /** True when this import is a re-run of edited skipped rows. */
+  edited?: boolean;
+  /** Retry jobs: id of the original entry whose results get carried over. */
+  combineFrom?: string;
+  /** Retry jobs: retry rowIndex (1-based) -> original CSV rowIndex. */
   retryMap?: number[];
 }
 
@@ -103,6 +105,7 @@ export function completeEntry(jobId: string, summary: ImportSummary): void {
     totalRows: summary.totalRows,
     totalImported: summary.totalImported,
     totalSkipped: summary.totalSkipped,
+    ...(existing?.edited ? { edited: true } : {}),
     summary: summary.totalRows <= FULL_SUMMARY_MAX_ROWS ? summary : undefined,
   });
 }
@@ -114,12 +117,17 @@ export function failEntry(jobId: string, error: string): void {
   upsert({ ...existing, status: 'failed', error, summary: undefined });
 }
 
-/** Record a retry job: shows as pending, and merges into the original on completion. */
+
+
+/**
+ * Record a retry job: pending in the sidebar; on completion its results are
+ * combined with the original import's records into this (new) entry.
+ */
 export function addRetryEntry(
   jobId: string,
   fileName: string,
   totalRows: number,
-  mergeInto: string,
+  combineFrom: string,
   retryMap: number[]
 ): HistoryEntry {
   const entry: HistoryEntry = {
@@ -128,7 +136,8 @@ export function addRetryEntry(
     date: new Date().toISOString(),
     status: 'pending',
     totalRows,
-    mergeInto,
+    edited: true,
+    combineFrom,
     retryMap,
   };
   upsert(entry);
@@ -136,7 +145,7 @@ export function addRetryEntry(
 }
 
 /** Re-key a retry job's row indices back to the original CSV's row indices. */
-export function remapSummary(summary: ImportSummary, retryMap: number[]): ImportSummary {
+function remapSummary(summary: ImportSummary, retryMap: number[]): ImportSummary {
   const mapIdx = (r: number) => retryMap[r - 1] ?? r;
   return {
     ...summary,
@@ -145,14 +154,8 @@ export function remapSummary(summary: ImportSummary, retryMap: number[]): Import
   };
 }
 
-/**
- * Merge a (re-keyed) retry result into the original summary: newly imported
- * rows are appended; the skipped list is REPLACED by the rows still skipped.
- */
-export function mergeSummaries(
-  base: ImportSummary,
-  retryMapped: ImportSummary
-): ImportSummary {
+/** Original imported records + retry results = the full corrected dataset. */
+function combineSummaries(base: ImportSummary, retryMapped: ImportSummary): ImportSummary {
   const imported = [...base.imported, ...retryMapped.imported].sort(
     (a, b) => a.rowIndex - b.rowIndex
   );
@@ -168,41 +171,27 @@ export function mergeSummaries(
 }
 
 /**
- * Handle a finished job. Plain jobs complete their own entry; retry jobs
- * merge into their original entry and then remove themselves from history.
+ * Finalize a finished job and return the summary the UI should show.
+ * Plain jobs: completes the entry with the summary as-is. Retry jobs:
+ * combines the original import's records with the retry results first,
+ * so the "edited-" entry contains the complete dataset.
  */
-export function recordJobCompletion(jobId: string, summary: ImportSummary): void {
+export function finalizeJobCompletion(
+  jobId: string,
+  summary: ImportSummary,
+  baseOverride?: ImportSummary
+): ImportSummary {
   const entries = loadHistory();
   const entry = entries.find((e) => e.id === jobId);
-  if (!entry?.mergeInto) {
-    completeEntry(jobId, summary);
-    return;
+  let final = summary;
+  if (entry?.retryMap) {
+    const mapped = remapSummary(summary, entry.retryMap);
+    const base =
+      baseOverride ?? entries.find((e) => e.id === entry.combineFrom)?.summary;
+    final = base ? combineSummaries(base, mapped) : mapped;
   }
-
-  const mapped = remapSummary(summary, entry.retryMap ?? []);
-  const original = entries.find((e) => e.id === entry.mergeInto);
-  if (original) {
-    if (original.summary) {
-      const merged = mergeSummaries(original.summary, mapped);
-      upsert({
-        ...original,
-        status: 'done',
-        totalImported: merged.totalImported,
-        totalSkipped: merged.totalSkipped,
-        summary: merged.totalRows <= FULL_SUMMARY_MAX_ROWS ? merged : undefined,
-      });
-    } else {
-      // Original too large to store fully — update the counts at least.
-      upsert({
-        ...original,
-        status: 'done',
-        totalImported: (original.totalImported ?? 0) + mapped.totalImported,
-        totalSkipped: mapped.totalSkipped,
-      });
-    }
-  }
-  // The retry entry served its purpose — drop it.
-  persist(loadHistory().filter((e) => e.id !== jobId));
+  completeEntry(jobId, final);
+  return final;
 }
 
 export function removeHistoryEntry(id: string): HistoryEntry[] {

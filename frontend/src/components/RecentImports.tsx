@@ -5,8 +5,8 @@ import { AnimatePresence, motion } from 'motion/react';
 import { subscribeToJob } from '@/lib/api';
 import {
   failEntry,
+  finalizeJobCompletion,
   loadHistory,
-  recordJobCompletion,
   removeHistoryEntry,
   HISTORY_CHANGED_EVENT,
   type HistoryEntry,
@@ -58,8 +58,8 @@ export function RecentImports({ onOpen, showEmpty = false }: RecentImportsProps)
       const unsubscribe = subscribeToJob(entry.id, {
         onProgress: (p) => setLiveProgress((m) => ({ ...m, [entry.id]: p })),
         onDone: (summary) => {
-          // Retry jobs merge into their original entry; plain jobs complete.
-          recordJobCompletion(entry.id, summary);
+          // Retry jobs combine with their original's records; plain jobs as-is.
+          finalizeJobCompletion(entry.id, summary);
           setEntries(loadHistory());
         },
         onError: (message) => {
@@ -156,6 +156,11 @@ export function RecentImports({ onOpen, showEmpty = false }: RecentImportsProps)
 
                 <div className="mt-2 flex items-center justify-between gap-1.5 text-xs font-medium">
                   <div className="flex flex-wrap items-center gap-1.5">
+                  {entry.edited && (
+                    <span className="rounded-full bg-violet-100 px-2 py-0.5 text-violet-700 dark:bg-violet-500/15 dark:text-violet-400">
+                      edited
+                    </span>
+                  )}
                   {entry.status === 'pending' && (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400">
                       <span className="relative flex h-1.5 w-1.5">
