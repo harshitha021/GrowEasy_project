@@ -1,136 +1,180 @@
-# GrowEasy AI-Powered CSV Importer
+<div align="center">
 
-An AI-powered CSV importer that extracts CRM lead information from **any valid CSV format** — Facebook Lead exports, Google Ads exports, real-estate CRM dumps, sales trackers, hand-made spreadsheets — and converts them into GrowEasy CRM records using Azure OpenAI.
+# GrowEasy CSV Importer
+
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=Geist&weight=500&size=22&duration=2800&pause=800&color=6366F1&center=true&vCenter=true&width=520&lines=Import+leads+from+any+CSV.;AI+maps+the+columns.+You+ship+the+data.;Facebook+ads+%C2%B7+CRM+dumps+%C2%B7+messy+spreadsheets.)](https://grow-easy-harshitha.vercel.app/)
+
+<br/>
+
+[![Live Demo](https://img.shields.io/badge/Live_Demo-grow--easy--harshitha.vercel.app-6366f1?style=for-the-badge&logoColor=white)](https://grow-easy-harshitha.vercel.app/)
+
+<br/>
+
+![Next.js](https://img.shields.io/badge/Next.js_16-0a0a0a?style=flat-square&logo=next.js)
+![Express](https://img.shields.io/badge/Express-0a0a0a?style=flat-square&logo=express)
+![TypeScript](https://img.shields.io/badge/TypeScript-0a0a0a?style=flat-square&logo=typescript)
+![Azure OpenAI](https://img.shields.io/badge/Azure_OpenAI-0a0a0a?style=flat-square&logo=microsoftazure&logoColor=0078D4)
+![Redis](https://img.shields.io/badge/Redis-0a0a0a?style=flat-square&logo=redis&logoColor=DC382D)
+![Tests](https://img.shields.io/badge/17_tests-passing-0a0a0a?style=flat-square&logo=vitest&logoColor=22c55e)
+
+<br/>
+
+Upload a lead export in **any format** — different column names, layouts, languages.
+The AI maps everything into 15 standardized GrowEasy CRM fields. No templates, no configuration.
+
+</div>
+
+<br/>
 
 ## How it works
 
 ```
-Upload CSV → Preview rows → Confirm → AI extraction (batched) → Imported + Skipped results
+Upload  →  Preview & edit  →  Confirm  →  AI extraction  →  Results
 ```
 
-1. **Upload** — drag & drop or pick any `.csv` (up to 10 MB / 5,000 rows).
-2. **Preview** — the raw rows are parsed and shown in a scrollable, sticky-header table. No AI runs yet.
-3. **Confirm** — the backend creates a background **import job** (returns a `jobId` instantly), chunks rows into batches of 20, and processes them concurrently with automatic retry (exponential backoff). The UI subscribes to the job's SSE stream for live progress — and because the job runs independently of the connection, **reloading the page resumes the import** instead of losing it.
-4. **Results** — imported records and skipped rows (with reasons) are displayed with totals; the clean CRM CSV can be downloaded.
+|  | Step | What happens |
+|---|---|---|
+| 1 | **Upload** | Drag & drop any `.csv` — up to 10 MB / 5,000 rows |
+| 2 | **Preview** | Virtualized table, searchable, **editable inline** — no AI yet |
+| 3 | **Confirm** | A background job starts (`jobId` returned instantly); batches of 20, 3 concurrent, retry with backoff |
+| 4 | **Results** | Records + skipped rows with reasons, live stats, filters, inline editing, CSV export, fix-and-retry |
 
-### Key design decisions
+<br/>
 
-- **AI maps, code validates.** The LLM does the fuzzy field mapping; the server re-enforces every hard rule (allowed `crm_status`/`data_source` enums, `new Date()`-parseable dates, the "no email + no phone → skip" rule, single-line values). The model can never inject an invalid value into the CRM.
-- **Structured output.** The model is called with a strict JSON response schema (OpenAI structured outputs) — no free-text parsing.
-- **Batching + concurrency + retry.** Batches of 20 rows, 3 batches in flight, 3 attempts per batch with exponential backoff. A failed batch skips only its own rows, with the reason recorded.
-- **Resumable jobs.** `POST /api/import` returns a `jobId`; progress/results are consumed via `GET /api/import/:id/stream` (SSE). The frontend keeps the `jobId` in `sessionStorage` and re-subscribes after a reload. With `REDIS_URL` set, jobs also survive **server restarts**: job state (including per-batch completion) is persisted in Redis, and a startup sweep + reconnect-triggered recovery re-runs only the unfinished batches.
-- **No mandatory infrastructure.** Without `REDIS_URL` the same job system runs on an in-memory store (reload-proof, not restart-proof) — zero setup for local dev.
-- **Recent imports** are kept in the browser's localStorage (device-scoped, no login) and can be reopened instantly.
+## Architecture
 
-## Tech stack
+```mermaid
+flowchart LR
+    A[Next.js · Vercel] -->|CSV| B[/api/parse/]
+    A -->|rows| C[/api/import → jobId/]
+    C --> D[Job processor]
+    D <-->|strict JSON schema| E[Azure OpenAI o4-mini]
+    D --> F[(Redis / memory)]
+    A <-->|SSE progress| F
+```
 
-| Layer | Tech |
+The import runs **server-side, decoupled from the browser** — reload the page and it resumes; restart the server (with `REDIS_URL`) and a startup sweep re-runs only the unfinished batches. Multiple imports run in parallel, tracked live in the sidebar.
+
+<br/>
+
+## The AI layer
+
+> The model maps. The server decides. No AI output reaches the CRM unvalidated.
+
+| Rule | Enforcement |
 |---|---|
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
-| Backend | Node.js 22, Express 4, TypeScript |
-| AI | Azure OpenAI (`o4-mini`) via the official `openai` SDK |
-| Tests | Vitest |
+| `crm_status` — 4 allowed values | mapped by meaning, re-validated server-side |
+| `data_source` — 5 allowed values or blank | mapped confidently, re-validated server-side |
+| `created_at` parseable by `new Date()` | verified server-side; failures preserved in `crm_note` |
+| multiple emails / phones | first used, rest appended to `crm_note` |
+| no email **and** no phone | row skipped, with reason |
+| output shape | OpenAI structured outputs — strict JSON schema |
 
-## Project structure
+**Column-mapping transparency** — a parallel AI call reports how each CSV column was interpreted (`"Ph. Number" → mobile_without_country_code`), shown in the results view.
 
-```
-backend/
-  src/
-    index.ts              # server entry
-    app.ts                # express app (CORS, routes, error handler)
-    config.ts             # env-driven settings
-    routes/               # /api/parse, /api/import
-    controllers/          # request handling + SSE streaming
-    services/
-      csvParser.ts        # tolerant CSV parsing (BOM, ragged rows, dup headers)
-      aiExtractor.ts      # batching, LLM calls, retry, concurrency
-      validator.ts        # server-side rule enforcement
-    prompts/extraction.ts # the AI extraction prompt
-    types/crm.ts          # CRM field + enum definitions
-frontend/
-  src/
-    app/page.tsx          # 4-step wizard
-    components/           # dropzone, tables, progress, results, stats
-    hooks/useImport.ts    # wizard state machine
-    lib/api.ts            # API client + SSE stream reader
-samples/                  # messy sample CSVs to try
-```
+<br/>
+
+## Features
+
+|  |  |
+|---|---|
+| Resumable import jobs | survive reloads; with Redis, server restarts too |
+| Virtualized tables | 5,000 rows scroll smoothly, sticky headers |
+| Inline editing | fix raw data before AI, or records after — enums become dropdowns |
+| Fix-and-retry | edit skipped rows in place, re-run only them; combined result marked `edited` |
+| Search + filters | full-text search on both tables; status/source filters post-AI |
+| Import history | localStorage, no login — live pending %, re-openable results |
+| Motion design | spring physics, staggered reveals, count-up stats — respects `prefers-reduced-motion` |
+| Dark mode | true-black theme, persisted toggle |
+
+<br/>
 
 ## API
 
-| Method | Path | Description |
+| Method | Path | Returns |
 |---|---|---|
-| `POST` | `/api/parse` | multipart field `file` → `{ headers, rows, totalRows }` (no AI) |
-| `POST` | `/api/import` | JSON `{ rows }` → `202 { jobId }` — starts a background job |
-| `GET` | `/api/import/:id/stream` | SSE: `progress`, `done` (full summary), `fatal`, `not_found` |
-| `GET` | `/api/import/:id` | JSON job snapshot (poll fallback) |
-| `GET` | `/health` | health + AI configuration status |
+| `POST` | `/api/parse` | `{ headers, rows, totalRows }` — no AI |
+| `POST` | `/api/import` | `202 { jobId }` — starts background job |
+| `GET` | `/api/import/:id/stream` | SSE — `progress` · `done` · `fatal` · `not_found` |
+| `GET` | `/api/import/:id` | JSON job snapshot |
+| `GET` | `/health` | health + AI config status |
 
-## Local setup
+<br/>
 
-### Prerequisites
-
-- Node.js 20+
-- Azure OpenAI credentials (endpoint + API key + a deployed model, e.g. `o4-mini`)
-
-### Backend
+## Quick start
 
 ```bash
-cd backend
-npm install
-cp .env.example .env       # then fill in your Azure OpenAI credentials
-npm run dev                # http://localhost:4000
+# backend                                # frontend (new terminal)
+cd backend                               cd frontend
+npm install                              npm install
+cp .env.example .env                     cp .env.example .env.local
+npm run dev   # :4000                    npm run dev   # :3000
 ```
 
-### Frontend
+Add your Azure OpenAI credentials to `backend/.env`, then try the sample files in [`samples/`](samples/).
+
+<details>
+<summary><b>Environment variables</b></summary>
+<br/>
 
 ```bash
-cd frontend
-npm install
-cp .env.example .env.local # NEXT_PUBLIC_API_URL defaults to http://localhost:4000
-npm run dev                # http://localhost:3000
+PORT=4000
+CORS_ORIGINS=http://localhost:3000            # comma-separated
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_ENDPOINT=https://....openai.azure.com/
+AZURE_DEPLOYMENT=o4-mini
+AZURE_OPENAI_API_VERSION=2025-01-01-preview
+BATCH_SIZE=20
+MAX_CONCURRENT_BATCHES=3
+MAX_RETRIES=3
+REDIS_URL=                                    # optional — restart-proof jobs (Upstash)
+JOB_TTL_SECONDS=3600
 ```
+</details>
 
-Open http://localhost:3000 and try the files in `samples/`.
-
-### Tests
+<details>
+<summary><b>Tests · Docker · Deployment</b></summary>
+<br/>
 
 ```bash
-cd backend && npm test     # 17 unit tests (parser + validator rules)
+cd backend && npm test        # 17 unit tests — parser edge cases + every CRM rule
 ```
-
-### Optional: Redis (restart-proof imports)
-
-Create a free Redis database (e.g. [Upstash](https://upstash.com)) and set in `backend/.env`:
-
-```
-REDIS_URL=rediss://default:...@...upstash.io:6379
-```
-
-Without it, jobs use an in-memory store: page reloads still resume, but a server restart loses in-flight jobs.
-
-### Docker
 
 ```bash
 AZURE_OPENAI_API_KEY=... AZURE_OPENAI_ENDPOINT=https://... docker compose up --build
-# frontend on :3000, backend on :4000
 ```
 
-## CRM extraction rules implemented
+| Piece | Platform | Config |
+|---|---|---|
+| Frontend | [Vercel](https://grow-easy-harshitha.vercel.app/) | root `frontend/` · env `NEXT_PUBLIC_API_URL` |
+| Backend | Render / Railway | root `backend/` · `npm install && npm run build` · `npm start` |
+</details>
 
-- 15 CRM fields extracted when available (`created_at`, `name`, `email`, `country_code`, `mobile_without_country_code`, `company`, `city`, `state`, `country`, `lead_owner`, `crm_status`, `crm_note`, `data_source`, `possession_time`, `description`).
-- `crm_status` restricted to `GOOD_LEAD_FOLLOW_UP | DID_NOT_CONNECT | BAD_LEAD | SALE_DONE`; free-text statuses are mapped by meaning, unmappable ones preserved in `crm_note`.
-- `data_source` restricted to the 5 allowed values, blank when not confidently matched.
-- `created_at` guaranteed `new Date()`-parseable (verified server-side).
-- Multiple emails/phones: first one used, the rest appended to `crm_note`.
-- Rows with neither email nor mobile are skipped, with the reason shown in the UI.
-- All values kept single-line so every record stays one CSV row.
+<details>
+<summary><b>Project structure</b></summary>
+<br/>
 
-## Deployment
+```
+backend/src/
+  routes/ controllers/            /api/parse · /api/import · SSE
+  services/
+    csvParser.ts                  tolerant parsing — BOM, ragged rows, dup headers
+    aiExtractor.ts                batching · structured outputs · retry
+    validator.ts                  server-side rule enforcement
+    jobProcessor.ts jobStore.ts   resumable jobs — Redis / in-memory
+  prompts/extraction.ts           ★ the extraction + mapping prompts
+frontend/src/
+  app/page.tsx                    4-step wizard + sidebar history
+  components/                     dropzone · virtualized tables · results
+  hooks/useImport.ts              wizard state machine
+samples/                          messy sample CSVs to demo with
+```
+</details>
 
-- **Frontend** → Vercel: import the repo, set root directory to `frontend/`, add `NEXT_PUBLIC_API_URL` pointing at the deployed backend.
-- **Backend** → Render/Railway: root directory `backend/`, build `npm install && npm run build`, start `npm start`, env vars `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_DEPLOYMENT`, and `CORS_ORIGINS=https://<your-vercel-domain>`.
+<br/>
 
-## Bonus features implemented
+---
 
-- Drag & drop upload · live progress during AI processing (SSE) · retry with backoff for failed AI batches · **resumable import jobs** (survive page reloads; with Redis, also server restarts — only unfinished batches re-run) · dark mode · unit tests · Docker + docker-compose · skipped-row reasons · download of the converted CRM CSV · recent-imports history with re-openable results (localStorage, no login) · fully animated UI (Motion spring physics, respects reduced motion)
+<div align="center">
+<sub>Built for the GrowEasy Software Developer Assignment · <a href="https://grow-easy-harshitha.vercel.app/">try it live</a></sub>
+</div>
